@@ -1,21 +1,14 @@
-import { faker } from '@faker-js/faker';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { faker } from "@faker-js/faker";
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { join } from "path";
 
-/**
- * Ejemplo con tus interfaces de tabla
- npx ts-node scripts/generate-mock-data.ts src/app/core/table/table.interface.ts IFTableData
-
- * Ejemplo con cualquier otro archivo (el script lo parseará automáticamente)
- npx ts-node scripts/generate-mock-data.ts src/app/core/user/user.types.ts UserAccount
-*/
-
+/** Mapeo de claves a generadores de Faker */
 const fieldGuesser: Record<string, () => any> = {
     id: () => faker.string.uuid(),
     name: () => faker.person.fullName(),
     email: () => faker.internet.email(),
     label: () => faker.commerce.productName(),
-    status: () => faker.helpers.arrayElement(['active', 'inactive', 'pending']),
+    status: () => faker.helpers.arrayElement(["active", "inactive", "pending"]),
     service: () => faker.commerce.department(),
     columns: () => Array.from({ length: 3 }, () => ({ definition: faker.lorem.word(), label: faker.word.words(2) })),
     values: () => Array.from({ length: 3 }, () => ({ id: faker.string.uuid(), name: faker.person.fullName() })),
@@ -23,46 +16,65 @@ const fieldGuesser: Record<string, () => any> = {
     route: () => faker.internet.url(),
 };
 
-const guessValue = (key: string, type: string) => {
+export const guessValue = (key: string, type: string) => {
     const k = key.toLowerCase();
     const match = Object.entries(fieldGuesser).find(([p]) => k.includes(p));
     if (match) return match[1]();
-    if (type.includes('boolean')) return faker.datatype.boolean();
-    if (type.includes('number')) return faker.number.int({ min: 1, max: 100 });
-    return type.includes('[]') ? [] : faker.word.sample();
+    if (type.includes("boolean")) return faker.datatype.boolean();
+    if (type.includes("number")) return faker.number.int({ min: 1, max: 100 });
+    return type.includes("[]") ? [] : faker.word.sample();
+};
+
+export const parseInterface = (content: string, interfaceName: string) => {
+    const match = content.match(new RegExp(`interface ${interfaceName}\\s*{([\\s\\S]*?)}`, "m"));
+
+    if (!match) return null;
+
+    return match[1].split("\n")
+        .map(l => l.trim())
+        .filter(l => l && l.includes(":"))
+        .reduce((acc, line) => {
+            const [p, t] = line.split(":");
+            const key = p.replace("?", "").trim();
+            acc[key] = guessValue(key, t.split(";")[0].trim());
+            return acc;
+        }, {} as any);
+};
+
+export const generateMockFile = (filePath: string, interfaceName: string) => {
+    if (!filePath || !interfaceName || !existsSync(filePath)) {
+        throw new Error("Error: Usage: pnpm generate <path> <interface>");
+    }
+
+    const content = readFileSync(filePath, "utf-8");
+    const mockData = parseInterface(content, interfaceName);
+
+    if (!mockData) {
+        throw new Error(`Error: Interface "${interfaceName}" not found in ${filePath}`);
+    }
+
+    const out = join(process.cwd(), "mock-data");
+    if (!existsSync(out)) mkdirSync(out);
+
+    writeFileSync(join(out, `${interfaceName}.mock.js`), `/** Mock: ${interfaceName} */\nmodule.exports = ${JSON.stringify(mockData, null, 2)};\n`);
+    return join(out, `${interfaceName}.mock.js`);
 };
 
 const main = () => {
-    const [path, name] = process.argv.slice(2);
-
-    if (!path || !name || !existsSync(path)) {
-        process.stderr.write('Error: Usage: npx ts-node scripts/generate-mock-data.ts <path> <interface>\n');
-        process.exit(1);
+    if (require.main === module) {
+        let args = process.argv.slice(2);
+        // Filtramos '--' que pnpm o ts-node pueden inyectar
+        args = args.filter(arg => arg !== '--');
+        
+        const [filePath, name] = args;
+        try {
+            const result = generateMockFile(filePath, name);
+            console.log(`✅ Created: ${result}`);
+        } catch (error: any) {
+            console.error(error.message);
+            process.exit(1);
+        }
     }
-
-    const content = readFileSync(path, 'utf-8');
-    const match = content.match(new RegExp(`interface ${name}\\s*{([\\s\\S]*?)}`, 'm'));
-
-    if (!match) {
-        console.error(`Error: No se encontró la interfaz "${name}"`);
-        process.exit(1);
-    }
-
-    const mockData = match[1].split('\n')
-        .map(l => l.trim())
-        .filter(l => l && l.includes(':'))
-        .reduce((acc, line) => {
-            const [p, t] = line.split(':');
-            const key = p.replace('?', '').trim();
-            acc[key] = guessValue(key, t.split(';')[0].trim());
-            return acc;
-        }, {} as any);
-
-    const out = join(process.cwd(), 'mock-data');
-    if (!existsSync(out)) mkdirSync(out);
-
-    writeFileSync(join(out, `${name}.mock.js`), `/** Mock: ${name} */\nmodule.exports = ${JSON.stringify(mockData, null, 2)};\n`);
-    console.log(`Created: mock-data/${name}.mock.js`);
 };
 
 main();
